@@ -1,6 +1,8 @@
 # This file is a part of JuliaFEM.
 # License is MIT: see https://github.com/JuliaFEM/JuliaFEM.jl/blob/master/LICENSE.md
 
+using Base.Threads
+
 function isapprox(a1::Assembly, a2::Assembly)
     T = isapprox(a1.K, a2.K)
     T &= isapprox(a1.C1, a2.C1)
@@ -17,7 +19,7 @@ end
 function assemble_posthook!
 end
 
-function assemble!(problem::Problem, time=0.0; auto_initialize=true)
+function assemble!(problem::Problem, time=0.0; auto_initialize=true, threading=true)
     if !isempty(problem.assembly)
         warn("Assemble problem $(problem.name): problem.assembly is not empty and assembling, are you sure you know what are you doing?")
     end
@@ -37,12 +39,35 @@ function assemble!(problem::Problem, time=0.0; auto_initialize=true)
     if method_exists(assemble_prehook!, Tuple{typeof(problem), Float64})
         assemble_prehook!(problem, time)
     end
-    for element in get_elements(problem)
-        assemble!(problem.assembly, problem, element, time)
+
+    chunks(a, n) = [a[i:n:end] for i=1:n]
+
+    function assemble_elements!(assembly, problem, elements, time)
+        for element in elements
+            assemble!(assembly, problem, element, time)
+        end
     end
+
+    if threading
+        n_chunks = nthreads()
+        assemblies = [Assembly() for i=1:n_chunks]
+        element_subsets = chunks(get_elements(problem), n_chunks)
+        @threads for i=1:n_chunks
+            assemble_elements!(assemblies[i], problem, element_subsets[i], time)
+        end
+        for i=1:n_chunks
+            append!(problem.assembly, assemblies[i])
+        end
+    else
+        for element in get_elements(problem)
+            assemble!(problem.assembly, problem, element, time)
+        end
+    end
+
     if method_exists(assemble_posthook!, Tuple{typeof(problem), Float64})
         assemble_posthook!(problem, time)
     end
+
     return true
 end
 
