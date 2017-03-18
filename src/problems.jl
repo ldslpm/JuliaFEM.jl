@@ -81,6 +81,18 @@ function isempty(assembly::Assembly)
     return T
 end
 
+function append!(a1::Assembly, a2::Assembly)
+    append!(a1.K, a2.K)
+    append!(a1.Kg, a2.Kg)
+    append!(a1.f, a2.f)
+    append!(a1.fg, a2.fg)
+    append!(a1.C1, a2.C1)
+    append!(a1.C2, a2.C2)
+    append!(a1.D, a2.D)
+    append!(a1.g, a2.g)
+    append!(a1.c, a2.c)
+end
+
 type Problem{P<:AbstractProblem}
     name :: AbstractString           # descriptive name for problem
     dimension :: Int                 # degrees of freedom per node
