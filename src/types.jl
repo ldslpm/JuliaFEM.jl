@@ -5,11 +5,11 @@ typealias Node Vector{Float64}
 
 abstract AbstractPoint
 
-type Point{P<:AbstractPoint}
+immutable Point{P<:AbstractPoint}
     id :: Int
     weight :: Float64
-    coords :: Vector{Float64}
-    fields :: Dict{AbstractString, Field}
+    coords :: Tuple{Vararg{Float64}}
+    fields :: Dict{String, Field}
     properties :: P
 end
 
@@ -54,6 +54,6 @@ end
 
 typealias IP Point{IntegrationPoint}
 
-function IP(id, weight, coords)
+function IP(id::Int, weight::Float64, coords::Tuple{Vararg{Float64}})
     return IP(id, weight, coords, Dict(), IntegrationPoint())
 end

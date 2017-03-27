@@ -226,16 +226,14 @@ function get_integration_points(element::TetrahedralElement, ::Type{Val{2}})
 end
 
 function get_integration_points(element::TetrahedralElement, ::Type{Val{3}})
-    a = 1.0/4.0
-    b = 1.0/6.0
-    c = 1.0/2.0
-    weights = [-2.0/15.0, 3.0/40.0, 3.0/40.0, 3.0/40.0, 3.0/40.0]
-    points = Vector{Float64}[
-        [a, a, a],
-        [b, b, b],
-        [b, b, c],
-        [b, c, b],
-        [c, b, b]]
+    weights = (-2.0/15.0, 3.0/40.0, 3.0/40.0, 3.0/40.0, 3.0/40.0)
+    points = (
+              (1.0/4.0, 1.0/4.0, 1.0/4.0),
+              (1.0/6.0, 1.0/6.0, 1.0/6.0),
+              (1.0/6.0, 1.0/6.0, 1.0/2.0),
+              (1.0/6.0, 1.0/2.0, 1.0/6.0),
+              (1.0/2.0, 1.0/6.0, 1.0/6.0)
+             )
     return zip(weights, points)
 end
 
