@@ -19,7 +19,22 @@ end
 function assemble_posthook!
 end
 
-function assemble!(problem::Problem, time=0.0; auto_initialize=true, threading=true)
+""" Assemble problem, i.e. construct global stiffness matrix and force vector
+for field problem, constraint matrices C1, C2, D and g for boundary problems
+for all for mixed problems.
+
+Parameters
+----------
+
+auto_initialize
+    initialize problem before assembling automatically (solver will do this anyway)
+threded
+    use multithreading when assembling
+parallel
+    use distributed computing when assembling
+
+"""
+function assemble!(problem::Problem, time::Real; auto_initialize=true, threaded=false, parallel=false)
     if !isempty(problem.assembly)
         warn("Assemble problem $(problem.name): problem.assembly is not empty and assembling, are you sure you know what are you doing?")
     end
@@ -42,27 +57,41 @@ function assemble!(problem::Problem, time=0.0; auto_initialize=true, threading=t
 
     chunks(a, n) = [a[i:n:end] for i=1:n]
 
-    function assemble_elements!(assembly, problem, elements, time)
+    function assemble_elements(elements)
+        assembly = Assembly()
         for element in elements
             assemble!(assembly, problem, element, time)
         end
+        return assembly
     end
 
-    if threading
+    if threaded && !parallel
         n_chunks = nthreads()
-        assemblies = [Assembly() for i=1:n_chunks]
+        info("Using threading ($(nthreads()) threads) in assemble, splitting problem to $n_chunks chunks.")
         element_subsets = chunks(get_elements(problem), n_chunks)
+        assemblies = [Assembly() for i=1:n_chunks]
         @threads for i=1:n_chunks
-            assemble_elements!(assemblies[i], problem, element_subsets[i], time)
+            for element in element_subsets[i]
+                assemble!(assemblies[i], problem, element, time)
+            end
         end
-        for i=1:n_chunks
-            append!(problem.assembly, assemblies[i])
+        for subassembly in assemblies
+            append!(problem.assembly, subassembly)
+        end
+    elseif !threaded && parallel
+        n_chunks = nworkers()
+        info("Using parallel map ($(nworkers()) workers) in assemble, splitting problem to $n_chunks chunks.")
+        element_subsets = chunks(get_elements(problem), n_chunks)
+        assemblies = pmap(assemble_elements, element_subsets)
+        for subassembly in assemblies
+            append!(problem.assembly, subassembly)
         end
     else
         for element in get_elements(problem)
             assemble!(problem.assembly, problem, element, time)
         end
     end
+
 
     if method_exists(assemble_posthook!, Tuple{typeof(problem), Float64})
         assemble_posthook!(problem, time)
