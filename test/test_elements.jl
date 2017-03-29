@@ -131,3 +131,52 @@ end
         0.00 0.25 0.00 0.25 0.00 0.25 0.00 0.25]
     @test isapprox(el([0.0, 0.0], 0.0, 2), expected)
 end
+
+
+@testset "test tet10 element" begin
+    element = Element(Tet10, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    x1 = [2.0, 3.0, 4.0]
+    x2 = [6.0, 3.0, 2.0]
+    x3 = [2.0, 5.0, 1.0]
+    x4 = [4.0, 3.0, 6.0]
+    x5 = 0.5*(x1+x2)
+    x6 = 0.5*(x2+x3)
+    x7 = 0.5*(x3+x1)
+    x8 = 0.5*(x1+x4)
+    x9 = 0.5*(x2+x4)
+    x10 = 0.5*(x3+x4)
+    X = Dict(
+             1 => x1,
+             2 => x2,
+             3 => x3,
+             4 => x4,
+             5 => x5,
+             6 => x6,
+             7 => x7,
+             8 => x8,
+             9 => x9,
+             10 => x10)
+    update!(element, "geometry", X)
+    @test length(element) == 10
+    @test length(Tet10) == 10
+    @test (@allocated length(Tet10)) == 0
+    @test size(Tet10) == (3, 10)
+    @test (@allocated size(Tet10)) == 0
+    N = zeros(1, length(Tet10))
+    dN = zeros(3, length(Tet10))
+    J = zeros(3, 3)
+    invJ = zeros(3, 3)
+    ip = first(get_integration_points(element))
+    time = 0.0
+    element_info!(element, ip, time, N, dN, J, invJ)
+    info(N)
+    info(dN)
+    info(J)
+    info(invJ)
+    evaluate_basis!(Tet10, ip.coords, N)
+    evaluate_dbasis!(Tet10, ip.coords, dN)
+    @test (@allocated evaluate_basis!(Tet10, ip.coords, N)) == 0
+    @test (@allocated evaluate_dbasis!(Tet10, ip.coords, dN)) == 0
+    @test (@allocated element_info!(element, ip, time, N, dN, J, invJ)) == 0
+end
+

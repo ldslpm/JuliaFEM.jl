@@ -353,6 +353,62 @@ function get_interpolation_polynomial(::Type{Tet10}, xi, ::Type{Val{:partial_der
     ]
 end
 
+function length(::Type{Tet10})
+    return 10
+end
+
+function size(::Type{Tet10})
+    return (3, 10)
+end
+
+function evaluate_basis!(::Type{Tet10}, xi::Tuple{Float64, Float64, Float64}, N::Matrix)
+    N[1] = 2*xi[1]^2 + 4*xi[1]*xi[2] + 4*xi[1]*xi[3] - 3*xi[1] + 2*xi[2]^2 + 4*xi[2]*xi[3] - 3*xi[2] + 2*xi[3]^2 - 3*xi[3] + 1
+    N[2] = xi[1]*(2*xi[1] - 1)
+    N[3] = xi[2]*(2*xi[2] - 1)
+    N[4] = xi[3]*(2*xi[3] - 1)
+    N[5] = 4*xi[1]*(-xi[1] - xi[2] - xi[3] + 1)
+    N[6] = 4*xi[1]*xi[2]
+    N[7] = 4*xi[2]*(-xi[1] - xi[2] - xi[3] + 1)
+    N[8] = 4*xi[3]*(-xi[1] - xi[2] - xi[3] + 1)
+    N[9] = 4*xi[1]*xi[3]
+    N[10] = 4*xi[2]*xi[3]
+    return nothing
+end
+
+function evaluate_dbasis!(::Type{Tet10}, xi::Tuple{Float64, Float64, Float64}, dN::Matrix)
+    dN[1] = 4*xi[1] + 4*xi[2] + 4*xi[3] - 3
+    dN[2] = 4*xi[1] + 4*xi[2] + 4*xi[3] - 3
+    dN[3] = 4*xi[1] + 4*xi[2] + 4*xi[3] - 3
+    dN[4] = 4*xi[1] - 1
+    dN[5] = 0
+    dN[6] = 0
+    dN[7] = 0
+    dN[8] = 4*xi[2] - 1
+    dN[9] = 0
+    dN[10] = 0
+    dN[11] = 0
+    dN[12] = 4*xi[3] - 1
+    dN[13] = -8*xi[1] - 4*xi[2] - 4*xi[3] + 4
+    dN[14] = -4*xi[1]
+    dN[15] = -4*xi[1]
+    dN[16] = 4*xi[2]
+    dN[17] = 4*xi[1]
+    dN[18] =  0
+    dN[19] = -4*xi[2]
+    dN[20] = -4*xi[1] - 8*xi[2] - 4*xi[3] + 4
+    dN[21] = -4*xi[2]
+    dN[22] = -4*xi[3]
+    dN[23] = -4*xi[3]
+    dN[24] = -4*xi[1] - 4*xi[2] - 8*xi[3] + 4
+    dN[25] = 4*xi[3]
+    dN[26] = 0
+    dN[27] = 4*xi[1]
+    dN[28] = 0
+    dN[29] = 4*xi[3]
+    dN[30] = 4*xi[2]
+    return nothing
+end
+
 #
 
 type Wedge6 <: AbstractElement
@@ -575,7 +631,7 @@ end
 @create_basis Quad8
 @create_basis Quad9
 @create_basis Tet4
-@create_basis Tet10
+# @create_basis Tet10
 @create_basis Wedge6
 @create_basis Wedge15
 @create_basis Hex8

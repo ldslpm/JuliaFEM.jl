@@ -53,17 +53,28 @@ function get_formulation_type(problem::Problem{Elasticity})
     return :incremental
 end
 
-function assemble!(assembly::Assembly, problem::Problem{Elasticity}, element::Element, time=0.0)
-    props = problem.properties
-    gdofs = get_gdofs(problem, element)
-    formulation = props.formulation
-    if formulation in [:plane_stress, :plane_strain]
-        formulation = :plane
+function assemble!(assembly::Assembly, problem::Problem{Elasticity}, elements::Vector{Element}, time::Real)
+    assemble!(assembly, problem, elements, time, Val{problem.properties.formulation})
+end
+
+function assemble!(assembly::Assembly, problem::Problem{Elasticity}, elements::Vector{Element}, time::Real, ::Type{Val{:plane_stress}})
+    for element in elements
+        gdofs = get_gdofs(problem, element)
+        Km, Kg, f = assemble(problem, element, time, Val{:plane})
+        add!(assembly.K, gdofs, gdofs, Km)
+        add!(assembly.Kg, gdofs, gdofs, Kg)
+        add!(assembly.f, gdofs, f)
     end
-    Km, Kg, f = assemble(problem, element, time, Val{formulation})
-    add!(assembly.K, gdofs, gdofs, Km)
-    add!(assembly.Kg, gdofs, gdofs, Kg)
-    add!(assembly.f, gdofs, f)
+end
+
+function assemble!(assembly::Assembly, problem::Problem{Elasticity}, elements::Vector{Element}, time::Real, ::Type{Val{:plane_strain}})
+    for element in elements
+        gdofs = get_gdofs(problem, element)
+        Km, Kg, f = assemble(problem, element, time, Val{:plane})
+        add!(assembly.K, gdofs, gdofs, Km)
+        add!(assembly.Kg, gdofs, gdofs, Kg)
+        add!(assembly.f, gdofs, f)
+    end
 end
 
 typealias Elasticity2DSurfaceElements Union{Poi1, Seg2, Seg3}
@@ -108,274 +119,122 @@ end
 #    end
 #end
 
-""" Elasticity equations for 2d cases. """
-function assemble{El<:Elasticity2DVolumeElements}(problem::Problem{Elasticity}, element::Element{El}, time, ::Type{Val{:plane}})
+include("problems_elasticity_2d.jl")
 
-    props = problem.properties
-    dim = get_unknown_field_dimension(problem)
-    nnodes = length(element)
-    BL = zeros(3, dim*nnodes)
-    BNL = zeros(4, dim*nnodes)
-    Km = zeros(dim*nnodes, dim*nnodes)
-    Kg = zeros(dim*nnodes, dim*nnodes)
-    f = zeros(dim*nnodes)
-    Dtan = zeros(3,3)
-
-    for ip in get_integration_points(element)
-
-        detJ = element(ip, time, Val{:detJ})
-        w = ip.weight*detJ
-        N = element(ip, time)
-        dN = element(ip, time, Val{:Grad})
-        # kinematics
-
-        gradu = element("displacement", ip, time, Val{:Grad})
-        fill!(BL, 0.0)
-
-        if props.finite_strain
-            strain = 1/2*(gradu + gradu' + gradu'*gradu)
-            F = eye(dim) + gradu
-            for i=1:size(dN, 2)
-                BL[1, 2*(i-1)+1] += F[1,1]*dN[1,i]
-                BL[1, 2*(i-1)+2] += F[2,1]*dN[1,i]
-                BL[2, 2*(i-1)+1] += F[1,2]*dN[2,i]
-                BL[2, 2*(i-1)+2] += F[2,2]*dN[2,i]
-                BL[3, 2*(i-1)+1] += F[1,1]*dN[2,i] + F[1,2]*dN[1,i]
-                BL[3, 2*(i-1)+2] += F[2,1]*dN[2,i] + F[2,2]*dN[1,i]
-            end
-        else # linearized strain
-            strain = 1/2*(gradu + gradu')
-            F = eye(dim)
-            for i=1:size(dN, 2)
-                BL[1, 2*(i-1)+1] = dN[1,i]
-                BL[2, 2*(i-1)+2] = dN[2,i]
-                BL[3, 2*(i-1)+1] = dN[2,i]
-                BL[3, 2*(i-1)+2] = dN[1,i]
-            end
-        end
-
-        strain_vec = [strain[1,1]; strain[2,2]; strain[1,2]]
-
-        # calculate stress
-        E = element("youngs modulus", ip, time)
-        nu = element("poissons ratio", ip, time)
-        if props.formulation == :plane_stress
-            D = E/(1.0 - nu^2) .* [
-                1.0  nu 0.0
-                nu  1.0 0.0
-                0.0 0.0 (1.0-nu)/2.0]
-        elseif props.formulation == :plane_strain
-            D = E/((1.0+nu)*(1.0-2.0*nu)) .* [
-                1.0-nu      nu               0.0
-                    nu  1.0-nu               0.0
-                   0.0     0.0  (1.0-2.0*nu)/2.0]
-        else
-            error("unknown plane formulation: $(props.formulation)")
-        end
-
-        # calculate stress
-        element_keys = get_keys(element)
-
-        if "plasticity" in element_keys
-            plastic_def = element("plasticity")[ip.id]
-
-            calculate_stress! = plastic_def["type"]
-            yield_surface_ = plastic_def["yield_surface"]
-            params = plastic_def["params"]
-
-            initialize_internal_params!(params, ip, Val{:type_2d})
-
-            if time == 0.0
-                error("Given step time = $(time). Please select time > 0.0")
-            end
-
-            t_last = ip("prev_time", time)
-            update!(ip, "prev_time", time => t_last)
-
-            dt = time - t_last
-
-            stress_last = ip("stress", t_last)
-            strain_last = ip("strain", t_last)
-
-            dstrain_vec = strain_vec - strain_last
-            stress_vec = [0.0, 0.0, 0.0]
-            pstrain = zeros(3)
-            calculate_stress!(stress_vec, stress_last, dstrain_vec, pstrain, D, params, Dtan, yield_surface_, time, dt, Val{:type_2d})
-        else
-            stress_vec = D * ([1.0, 1.0, 2.0] .* strain_vec)
-            Dtan[:,:] = D[:,:]
-        end
-
-        :strain in props.store_fields && update!(ip, "strain", time => strain_vec)
-        :stress in props.store_fields && update!(ip, "stress", time => stress_vec)
-        :stress11 in props.store_fields && update!(ip, "stress11", time => stress_vec[1])
-        :stress22 in props.store_fields && update!(ip, "stress22", time => stress_vec[2])
-        :stress12 in props.store_fields && update!(ip, "stress12", time => stress_vec[3])
-
-        Km += w*BL'*Dtan*BL
-
-
-        # stress = [stress_vec[1] stress_vec[3]; stress_vec[3] stress_vec[2]]
-        # cauchy_stress = F'*stress*F/det(F)
-        # cauchy_stress = [cauchy_stress[1,1]; cauchy_stress[2,2]; cauchy_stress[1,2]]
-        # update!(ip, "cauchy stress", time => cauchy_stress)
-
-        # material stiffness end
-
-        if props.geometric_stiffness
-            # take geometric stiffness into account
-
-            fill!(BNL, 0.0)
-            for i=1:size(dN, 2)
-                BNL[1, 2*(i-1)+1] = dN[1,i]
-                BNL[2, 2*(i-1)+1] = dN[2,i]
-                BNL[3, 2*(i-1)+2] = dN[1,i]
-                BNL[4, 2*(i-1)+2] = dN[2,i]
-            end
-
-            S2 = zeros(2*dim, 2*dim)
-            S2[1,1] = stress_vec[1]
-            S2[2,2] = stress_vec[2]
-            S2[1,2] = S2[2,1] = stress_vec[3]
-            S2[3:4,3:4] = S2[1:2,1:2]
-
-            Kg += w*BNL'*S2*BNL # geometric stiffness
-
-        end
-
-        # rhs, internal and external load
-
-        f -= w*BL'*stress_vec
-
-        if haskey(element, "displacement load")
-            b = element("displacement load", ip, time)
-            f += w*vec(b*N)
-        end
-
-        for i=1:dim
-            if haskey(element, "displacement load $i")
-                b = element("displacement load $i", ip, time)
-                f[i:dim:end] += w*vec(b*N)
-            end
-        end
-
-    end
-
-    return Km, Kg, f
+""" All continuum elements entry point. """
+function assemble!(assembly::Assembly, problem::Problem{Elasticity}, elements::Vector{Element}, time::Real, ::Type{Val{:continuum}})
+    assemble!(assembly, problem, [element for element in elements], time, Val{:continuum})
 end
 
-function assemble{El<:Elasticity2DSurfaceElements}(problem::Problem{Elasticity}, element::Element{El}, time::Real, ::Type{Val{:plane}})
+""" Continuum elements with volume. """
+function assemble!{El<:Elasticity3DVolumeElements}(assembly::Assembly, problem::Problem{Elasticity}, elements::Vector{Element{El}}, time::Real, ::Type{Val{:continuum}})
 
     props = problem.properties
     dim = get_unknown_field_dimension(problem)
-    nnodes = length(element)
-    Km = zeros(dim*nnodes, dim*nnodes)
-    Kg = zeros(dim*nnodes, dim*nnodes)
-    f = zeros(dim*nnodes)
-
-    for ip in get_integration_points(element)
-
-        detJ = element(ip, time, Val{:detJ})
-        w = ip.weight*detJ
-        N = element(ip, time)
-
-        if haskey(element, "displacement traction force")
-            T = element("displacement traction force", ip, time)
-            f += w*vec(T*N)
-        end
-
-        for i=1:dim
-            # traction force for ith component
-            if haskey(element, "displacement traction force $i")
-                T = element("displacement traction force $i", ip, time)
-                f[i:dim:end] += w*vec(T*N)
-            end
-        end
-
-        if haskey(element, "nt displacement traction force")
-            # traction force given in normal-tangential direction
-            T = element("nt displacement traction force", ip, time)
-            Q = element("normal-tangential coordinates", ip, time)
-            f += w*vec(Q'*T*N)
-        end
-
-    end
-
-    return Km, Kg, f
-end
-
-""" Elasticity equations, 3d nonlinear. """
-function assemble{El<:Elasticity3DVolumeElements}(problem::Problem{Elasticity}, element::Element{El}, time::Real, ::Type{Val{:continuum}})
-    props = problem.properties
-    dim = get_unknown_field_dimension(problem)
-    nnodes = length(element)
+    nnodes = length(El)
     ndofs = dim*nnodes
-    BL = zeros(6, ndofs)
-    BNL = zeros(9, ndofs)
+
+    info("Allocating workspace, dim=$dim, nnodes=$nnodes, ndofs=$ndofs")
+
     Km = zeros(ndofs, ndofs)
     Kg = zeros(ndofs, ndofs)
     f = zeros(ndofs)
 
-    for ip in get_integration_points(element)
-        detJ = element(ip, time, Val{:detJ})
-        w = ip.weight*detJ
-        N = element(ip, time)
-        dN = element(ip, time, Val{:Grad})
+    BL = zeros(6, ndofs)
+    BNL = zeros(9, ndofs)
+    gradu = zeros(3, 3)
+    strain = zeros(3, 3)
+    strain_vec = zeros(6)
+    stress_vec = zeros(6)
+    F = zeros(3, 3)
+    D = zeros(6, 6)
+    Dtan = zeros(6, 6)
+    S3 = zeros(3*dim, 3*dim)
+    N = zeros(1, nnodes)
+    dN = zeros(3, nnodes)
+    dN_ = zeros(3, nnodes)
+    J = zeros(3, 3)
+    invJ = zeros(3, 3)
 
-        # kinematics; calculate deformation gradient and strain
+    for element in elements
+    
+        fill!(Km, 0.0)
+        fill!(Kg, 0.0)
+        fill!(f, 0.0)
 
-        gradu = zeros(dim, dim)
-        if haskey(element, "displacement")
-            gradu += element("displacement", ip, time, Val{:Grad})
-        end
-        strain = 1/2*(gradu' + gradu)
+        for ip in get_integration_points(element)
 
-        F = eye(dim)
-        if props.finite_strain
-            F += gradu
-            strain += 1/2*gradu'*gradu
-        end
+            fill!(BL, 0.0)
+            fill!(BNL, 0.0)
+            fill!(gradu, 0.0)
+            fill!(F, 0.0)
+            fill!(strain, 0.0)
+            fill!(strain_vec, 0.0)
+            fill!(stress_vec, 0.0)
+            fill!(D, 0.0)
+            fill!(Dtan, 0.0)
+            fill!(S3, 0.0)
 
-        # material stiffness start
+            detJ = element_info!(element, ip, time, N, dN_, J, invJ)
+            A_mul_B!(dN, invJ, dN_)
 
-        fill!(BL, 0.0)
-        for i=1:nnodes
-            BL[1, 3*(i-1)+1] = F[1,1]*dN[1,i]
-            BL[1, 3*(i-1)+2] = F[2,1]*dN[1,i]
-            BL[1, 3*(i-1)+3] = F[3,1]*dN[1,i]
-            BL[2, 3*(i-1)+1] = F[1,2]*dN[2,i]
-            BL[2, 3*(i-1)+2] = F[2,2]*dN[2,i]
-            BL[2, 3*(i-1)+3] = F[3,2]*dN[2,i]
-            BL[3, 3*(i-1)+1] = F[1,3]*dN[3,i]
-            BL[3, 3*(i-1)+2] = F[2,3]*dN[3,i]
-            BL[3, 3*(i-1)+3] = F[3,3]*dN[3,i]
-            BL[4, 3*(i-1)+1] = F[1,1]*dN[2,i] + F[1,2]*dN[1,i]
-            BL[4, 3*(i-1)+2] = F[2,1]*dN[2,i] + F[2,2]*dN[1,i]
-            BL[4, 3*(i-1)+3] = F[3,1]*dN[2,i] + F[3,2]*dN[1,i]
-            BL[5, 3*(i-1)+1] = F[1,2]*dN[3,i] + F[1,3]*dN[2,i]
-            BL[5, 3*(i-1)+2] = F[2,2]*dN[3,i] + F[2,3]*dN[2,i]
-            BL[5, 3*(i-1)+3] = F[3,2]*dN[3,i] + F[3,3]*dN[2,i]
-            BL[6, 3*(i-1)+1] = F[1,3]*dN[1,i] + F[1,1]*dN[3,i]
-            BL[6, 3*(i-1)+2] = F[2,3]*dN[1,i] + F[2,1]*dN[3,i]
-            BL[6, 3*(i-1)+3] = F[3,3]*dN[1,i] + F[3,1]*dN[3,i]
-        end
+            w = ip.weight*detJ
 
-        strain_vec = [strain[1,1]; strain[2,2]; strain[3,3]; strain[1,2]; strain[2,3]; strain[1,3]]
+            # kinematics; calculate deformation gradient and strain
 
-        # calculate stress
-        E = element("youngs modulus", ip, time)
-        nu = element("poissons ratio", ip, time)
-        D = E/((1.0+nu)*(1.0-2.0*nu)) * [
-            1.0-nu nu nu 0.0 0.0 0.0
-            nu 1.0-nu nu 0.0 0.0 0.0
-            nu nu 1.0-nu 0.0 0.0 0.0
-            0.0 0.0 0.0 0.5-nu 0.0 0.0
-            0.0 0.0 0.0 0.0 0.5-nu 0.0
-            0.0 0.0 0.0 0.0 0.0 0.5-nu]
+            if haskey(element, "displacement")
+                u = last(element("displacement")).data
+                grad!(gradu, dN, u)
+            end
 
-        element_keys = get_keys(element)
+            for i =1:3
+                for j=1:3
+                    strain[i,j] = 1/2*(gradu[i] + gradu[j])
+                end
+            end
 
-            if "plasticity" in element_keys
+            for i = 1:3
+                F[i,i] = 1.0
+            end
+
+            if props.finite_strain
+                F += gradu
+                strain += 1/2*gradu'*gradu
+            end
+            
+            # material stiffness start
+
+            for i=1:nnodes
+                BL[1, 3*(i-1)+1] = F[1,1]*dN[1,i]
+                BL[1, 3*(i-1)+2] = F[2,1]*dN[1,i]
+                BL[1, 3*(i-1)+3] = F[3,1]*dN[1,i]
+                BL[2, 3*(i-1)+1] = F[1,2]*dN[2,i]
+                BL[2, 3*(i-1)+2] = F[2,2]*dN[2,i]
+                BL[2, 3*(i-1)+3] = F[3,2]*dN[2,i]
+                BL[3, 3*(i-1)+1] = F[1,3]*dN[3,i]
+                BL[3, 3*(i-1)+2] = F[2,3]*dN[3,i]
+                BL[3, 3*(i-1)+3] = F[3,3]*dN[3,i]
+                BL[4, 3*(i-1)+1] = F[1,1]*dN[2,i] + F[1,2]*dN[1,i]
+                BL[4, 3*(i-1)+2] = F[2,1]*dN[2,i] + F[2,2]*dN[1,i]
+                BL[4, 3*(i-1)+3] = F[3,1]*dN[2,i] + F[3,2]*dN[1,i]
+                BL[5, 3*(i-1)+1] = F[1,2]*dN[3,i] + F[1,3]*dN[2,i]
+                BL[5, 3*(i-1)+2] = F[2,2]*dN[3,i] + F[2,3]*dN[2,i]
+                BL[5, 3*(i-1)+3] = F[3,2]*dN[3,i] + F[3,3]*dN[2,i]
+                BL[6, 3*(i-1)+1] = F[1,3]*dN[1,i] + F[1,1]*dN[3,i]
+                BL[6, 3*(i-1)+2] = F[2,3]*dN[1,i] + F[2,1]*dN[3,i]
+                BL[6, 3*(i-1)+3] = F[3,3]*dN[1,i] + F[3,1]*dN[3,i]
+            end
+
+            strain_vec[1] = strain[1,1]
+            strain_vec[2] = strain[2,2]
+            strain_vec[3] = strain[3,3]
+            strain_vec[4] = 2*strain[1,2]
+            strain_vec[5] = 2*strain[2,3]
+            strain_vec[6] = 2*strain[1,3]
+
+            # calculate stress
+
+            if haskey(element, "plasticity")
                 plastic_def = element("plasticity")[ip.id]
 
                 calculate_stress! = plastic_def["type"]
@@ -397,97 +256,118 @@ function assemble{El<:Elasticity3DVolumeElements}(problem::Problem{Elasticity}, 
                 strain_last = ip("strain", t_last)
 
                 dstrain_vec = strain_vec - strain_last
-                stress_vec = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                plastic_strain = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                Dtan = [0.0 0.0 0.0 0.0 0.0 0.0;
-                        0.0 0.0 0.0 0.0 0.0 0.0;
-                        0.0 0.0 0.0 0.0 0.0 0.0
-                        0.0 0.0 0.0 0.0 0.0 0.0;
-                        0.0 0.0 0.0 0.0 0.0 0.0;
-                        0.0 0.0 0.0 0.0 0.0 0.0]
+                plastic_strain = zeros(6)
+
                 calculate_stress!(stress_vec, stress_last, dstrain_vec, plastic_strain, D, params, Dtan, yield_surface_, time, dt, Val{:type_3d})
 
+            else
 
-            # plastic_def = element.dev["plasticity"]
-            # calculate_stress! = plastic_def["stress"]
-            # params = plastic_def["params"]
-            # yield_surface_ = plastic_def["yield_surface"]
-            # (stress_last, strain_last) = get_internal_params(element.dev, ip.id, Val{:type_3d})
-            # dstrain_vec = strain_vec - strain_last
+                continue
+                
 
-            # calculate_stress!(stress_vec, stress_last, dstrain_vec, D, params, Dtan, yield_surface_, Val{:type_3d})
-        else
+                E = element("youngs modulus", ip, time)
+                nu = element("poissons ratio", ip, time)
+                Dtan[1,1] = E/((1.0+nu)*(1.0-2.0*nu)) * (1.0 - nu)
+                Dtan[2,2] = E/((1.0+nu)*(1.0-2.0*nu)) * (1.0 - nu)
+                Dtan[3,3] = E/((1.0+nu)*(1.0-2.0*nu)) * (1.0 - nu)
+                Dtan[4,4] = E/((1.0+nu)*(1.0-2.0*nu)) * (0.5 - nu)
+                Dtan[5,5] = E/((1.0+nu)*(1.0-2.0*nu)) * (0.5 - nu)
+                Dtan[6,6] = E/((1.0+nu)*(1.0-2.0*nu)) * (0.5 - nu)
+                Dtan[1,2] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
+                Dtan[2,1] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
+                Dtan[1,3] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
+                Dtan[3,1] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
+                Dtan[2,3] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
+                Dtan[3,2] = E/((1.0+nu)*(1.0-2.0*nu)) * (nu)
 
-            stress_vec = D * ([1.0, 1.0, 1.0, 2.0, 2.0, 2.0].*strain_vec)
-            Dtan = D
-        end
 
-        :strain in props.store_fields && update!(ip, "strain", time => strain_vec)
-        :stress in props.store_fields && update!(ip, "stress", time => stress_vec)
-        :stress11 in props.store_fields && update!(ip, "stress11", time => stress_vec[1])
-        :stress22 in props.store_fields && update!(ip, "stress22", time => stress_vec[2])
-        :stress33 in props.store_fields && update!(ip, "stress33", time => stress_vec[3])
-        :stress12 in props.store_fields && update!(ip, "stress12", time => stress_vec[4])
-        :stress23 in props.store_fields && update!(ip, "stress23", time => stress_vec[5])
-        :stress13 in props.store_fields && update!(ip, "stress13", time => stress_vec[6])
-        :plastic_strain in props.store_fields && update!(ip, "plastic_strain", time => plastic_strain)
+                #=
+                Dtan[:,:] = E/((1.0+nu)*(1.0-2.0*nu)) * [
+                    1.0-nu nu nu 0.0 0.0 0.0
+                    nu 1.0-nu nu 0.0 0.0 0.0
+                    nu nu 1.0-nu 0.0 0.0 0.0
+                    0.0 0.0 0.0 0.5-nu 0.0 0.0
+                    0.0 0.0 0.0 0.0 0.5-nu 0.0
+                    0.0 0.0 0.0 0.0 0.0 0.5-nu]
+                =#
 
-        Km += w*BL'*Dtan*BL
-        # material stiffness end
+                A_mul_B!(stress_vec, Dtan, strain_vec)
 
-        if props.geometric_stiffness
-            # take geometric stiffness into account
-
-            fill!(BNL, 0.0)
-
-            for i=1:size(dN, 2)
-                BNL[1, 3*(i-1)+1] = dN[1,i]
-                BNL[2, 3*(i-1)+1] = dN[2,i]
-                BNL[3, 3*(i-1)+1] = dN[3,i]
-                BNL[4, 3*(i-1)+2] = dN[1,i]
-                BNL[5, 3*(i-1)+2] = dN[2,i]
-                BNL[6, 3*(i-1)+2] = dN[3,i]
-                BNL[7, 3*(i-1)+3] = dN[1,i]
-                BNL[8, 3*(i-1)+3] = dN[2,i]
-                BNL[9, 3*(i-1)+3] = dN[3,i]
             end
 
-            S3 = zeros(3*dim, 3*dim)
-            S3[1,1] = stress_vec[1]
-            S3[2,2] = stress_vec[2]
-            S3[3,3] = stress_vec[3]
-            S3[1,2] = S3[2,1] = stress_vec[4]
-            S3[2,3] = S3[3,2] = stress_vec[5]
-            S3[1,3] = S3[3,1] = stress_vec[6]
-            S3[4:6,4:6] = S3[7:9,7:9] = S3[1:3,1:3]
+            :strain in props.store_fields && update!(ip, "strain", time => strain_vec)
+            :stress in props.store_fields && update!(ip, "stress", time => stress_vec)
+            :stress11 in props.store_fields && update!(ip, "stress11", time => stress_vec[1])
+            :stress22 in props.store_fields && update!(ip, "stress22", time => stress_vec[2])
+            :stress33 in props.store_fields && update!(ip, "stress33", time => stress_vec[3])
+            :stress12 in props.store_fields && update!(ip, "stress12", time => stress_vec[4])
+            :stress23 in props.store_fields && update!(ip, "stress23", time => stress_vec[5])
+            :stress13 in props.store_fields && update!(ip, "stress13", time => stress_vec[6])
+            :plastic_strain in props.store_fields && update!(ip, "plastic_strain", time => plastic_strain)
 
-            Kg += w*BNL'*S3*BNL
+            continue
 
-        end
+            Km += w*BL'*Dtan*BL
 
-        # external load start
+            # material stiffness end
 
-        if haskey(element, "displacement load")
-            T = element("displacement load", ip, time)
-            f += w*vec(T*N)
-        end
+            if props.geometric_stiffness
+                # take geometric stiffness into account
 
-        for i=1:dim
-            if haskey(element, "displacement load $i")
-                b = element("displacement load $i", ip, time)
-                f[i:dim:end] += w*vec(b*N)
+                for i=1:size(dN, 2)
+                    BNL[1, 3*(i-1)+1] = dN[1,i]
+                    BNL[2, 3*(i-1)+1] = dN[2,i]
+                    BNL[3, 3*(i-1)+1] = dN[3,i]
+                    BNL[4, 3*(i-1)+2] = dN[1,i]
+                    BNL[5, 3*(i-1)+2] = dN[2,i]
+                    BNL[6, 3*(i-1)+2] = dN[3,i]
+                    BNL[7, 3*(i-1)+3] = dN[1,i]
+                    BNL[8, 3*(i-1)+3] = dN[2,i]
+                    BNL[9, 3*(i-1)+3] = dN[3,i]
+                end
+
+                S3[1,1] = stress_vec[1]
+                S3[2,2] = stress_vec[2]
+                S3[3,3] = stress_vec[3]
+                S3[1,2] = S3[2,1] = stress_vec[4]
+                S3[2,3] = S3[3,2] = stress_vec[5]
+                S3[1,3] = S3[3,1] = stress_vec[6]
+                S3[4:6,4:6] = S3[7:9,7:9] = S3[1:3,1:3]
+
+                Kg += w*BNL'*S3*BNL
+
             end
-        end
 
-        # external load end
+            # external load start
 
-        if get_formulation_type(problem) == :incremental
-            f -= w*BL'*stress_vec
+            if haskey(element, "displacement load")
+                T = element("displacement load", ip, time)
+                f += w*vec(T*N)
+            end
+
+            for i=1:dim
+                if haskey(element, "displacement load $i")
+                    b = element("displacement load $i", ip, time)
+                    f[i:dim:end] += w*vec(b*N)
+                end
+            end
+
+            # external load end
+
+            if get_formulation_type(problem) == :incremental
+                f -= w*BL'*stress_vec
+            end
+
         end
+        
+        #gdofs = get_gdofs(problem, element)
+
+        #add!(assembly.K, gdofs, gdofs, Km)
+        #add!(assembly.Kg, gdofs, gdofs, Kg)
+        #add!(assembly.f, gdofs, f)
 
     end
 
-    return Km, Kg, f
 end
 
 """ Elasticity equations, surface traction for continuum formulation. """

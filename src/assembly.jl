@@ -19,6 +19,14 @@ end
 function assemble_posthook!
 end
 
+function assemble!(assembly::Assembly, problem::Problem, elements::Vector{Element}, time::Real)
+    warn("assemble!() this is default assemble operation, decreased performance can be expected without preallocation of memory!")
+    for element in elements
+        assemble!(assembly, problem, element)
+    end
+    return nothing
+end
+
 """ Assemble problem, i.e. construct global stiffness matrix and force vector
 for field problem, constraint matrices C1, C2, D and g for boundary problems
 for all for mixed problems.
@@ -57,39 +65,39 @@ function assemble!(problem::Problem, time::Real; auto_initialize=true, threaded=
 
     chunks(a, n) = [a[i:n:end] for i=1:n]
 
-    function assemble_elements(elements)
-        assembly = Assembly()
-        for element in elements
-            assemble!(assembly, problem, element, time)
-        end
-        return assembly
-    end
-
     if threaded && !parallel
         n_chunks = nthreads()
         info("Using threading ($(nthreads()) threads) in assemble, splitting problem to $n_chunks chunks.")
-        element_subsets = chunks(get_elements(problem), n_chunks)
-        assemblies = [Assembly() for i=1:n_chunks]
+        sub_elements = chunks(get_elements(problem), n_chunks)
+        sub_assemblies = [Assembly() for i=1:n_chunks]
+        sub_problems = [copy(problem) for i=1:n_chunks]
         @threads for i=1:n_chunks
-            for element in element_subsets[i]
-                assemble!(assemblies[i], problem, element, time)
-            end
+            assemble!(sub_assemblies[i], sub_problems, sub_elements[i], time)
         end
-        for subassembly in assemblies
-            append!(problem.assembly, subassembly)
+        for sub_assembly in sub_assemblies
+            append!(problem.assembly, sub_assembly)
         end
     elseif !threaded && parallel
         n_chunks = nworkers()
         info("Using parallel map ($(nworkers()) workers) in assemble, splitting problem to $n_chunks chunks.")
-        element_subsets = chunks(get_elements(problem), n_chunks)
-        assemblies = pmap(assemble_elements, element_subsets)
-        for subassembly in assemblies
-            append!(problem.assembly, subassembly)
+        sub_elements = chunks(get_elements(problem), n_chunks)
+        sub_problems = [copy(problem) for i=1:n_chunks]
+        input_data = collect(zip(sub_problems, sub_elements))
+
+        function parallel_assemble(input_data)
+            assembly = Assembly()
+            problem, elements = input_data
+            assemble!(assembly, problem, elements, time)
+            return assembly
+        end
+
+        sub_assemblies = pmap(parallel_assemble, input_data)
+
+        for sub_assembly in sub_assemblies
+            append!(problem.assembly, sub_assembly)
         end
     else
-        for element in get_elements(problem)
-            assemble!(problem.assembly, problem, element, time)
-        end
+        assemble!(problem.assembly, problem, problem.elements, time)
     end
 
 

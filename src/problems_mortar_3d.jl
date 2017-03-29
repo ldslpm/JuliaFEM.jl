@@ -7,22 +7,6 @@ function project_vertex_to_auxiliary_plane(p::Vector, x0::Vector, n0::Vector)
     return p - dot(p-x0, n0)*n0
 end
 
-function inv3(P::Matrix)
-    n, m = size(P)
-    @assert n == m == 3
-    a, b, c, d, e, f, g, h, i = P
-    A = e*i - f*h
-    B = -d*i + f*g
-    C = d*h - e*g
-    D = -b*i + c*h
-    E = a*i - c*g
-    F = -a*h + b*g
-    G = b*f - c*e
-    H = -a*f + c*d
-    I = a*e - b*d
-    return 1/(a*A + b*B + c*C)*[A B C; D E F; G H I]
-end
-
 function vertex_inside_polygon(q, P; atol=1.0e-3)
     N = length(P)
     angle = 0.0

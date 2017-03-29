@@ -40,12 +40,14 @@ export AbstractPoint, Point, IntegrationPoint, IP, Node
 include("elements.jl") # common element routines
 export Node, AbstractElement, Element, update!, get_connectivity, get_basis,
        get_dbasis, inside, get_local_coordinates, get_element_type,
-       filter_by_element_type, get_element_id
+       filter_by_element_type, get_element_id, element_info!
 
 include("elements_lagrange.jl") # Continuous Galerkin (Lagrange) elements
 export get_reference_coordinates,
        get_interpolation_polynomial,
-       description
+       description,
+       evaluate_basis!,
+       evaluate_dbasis!
 export Poi1,
        Seg2, Seg3,
        Tri3, Tri6, Tri7,

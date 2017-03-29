@@ -371,3 +371,92 @@ function inside{E}(element::Element{E}, X, time)
     xi = get_local_coordinates(element, X, time)
     return inside(E, xi)
 end
+
+function calculate_jacobian!{T}(J::Matrix{T}, dN::Matrix{T}, X::Vector{Vector{T}})
+    fill!(J, 0.0)
+    dim, nnodes = size(dN)
+    @assert size(J) == (dim, dim)
+    @assert length(X) >= nnodes
+    for i=1:nnodes
+        Xi = X[i]
+        @assert length(Xi) == dim
+        for j=1:dim
+            for k=1:dim
+                @inbounds J[j,k] += dN[j,i]*X[i][k]
+            end
+        end
+    end
+    return nothing
+end
+
+function grad!{T}(Y::Matrix{T}, dN::Matrix{T}, u::Vector{Vector{T}})
+    fill!(Y, 0.0)
+    dim, nnodes = size(dN)
+    @assert size(Y) == (dim, dim)
+    @assert length(u) >= nnodes
+    for i=1:nnodes
+        ui = u[i]
+        @assert length(ui) == dim
+        for j=1:dim
+            for k=1:dim
+                @inbounds Y[j,k] += dN[j,i]*ui[k]
+            end
+        end
+    end
+    return nothing
+end
+
+""" In place inversion of 3x3 matrix. """
+function inv3!{T}(invP::Matrix{T}, P::Matrix{T})::T
+    @assert size(P) == (3, 3)
+    @assert size(invP) == (3, 3)
+    a, b, c, d, e, f, g, h, i = P
+    detP = a*(e*i-f*h) + b*(f*g-d*i) + c*(d*h-e*g)
+    @assert detP != 0.0
+    invP[1] = 1/detP * (e*i - f*h)
+    invP[2] = 1/detP * (c*h - b*i)
+    invP[3] = 1/detP * (b*f - c*e)
+    invP[4] = 1/detP * (f*g - d*i)
+    invP[5] = 1/detP * (a*i - c*g)
+    invP[6] = 1/detP * (c*d - a*f)
+    invP[7] = 1/detP * (d*h - e*g)
+    invP[8] = 1/detP * (b*g - a*h)
+    invP[9] = 1/detP * (a*e - b*d)
+    return detP
+end
+
+function element_info!{E,T}(element::Element{E}, ip::IP, time::Float64, N::Matrix{T}, dN::Matrix{T}, J::Matrix{T}, invJ::Matrix{T})
+    field = element("geometry")
+    if isa(field, DVTI)
+        X = field.data
+    else
+        if time < first(field).time
+            X = first(field).data
+        elseif time > last(field).time
+            X = last(field).data
+        else
+            for i=reverse(1:length(field))
+                if isapprox(field[i].time, time)
+                    X = field[i].data
+                    break
+                end
+            end
+            # very unlikely but we may need to interpolate
+            for i=reverse(2:length(field))
+                t0 = field[i-1].time
+                t1 = field[i].time
+                if t0 < time < t1
+                    y0 = field[i-1].data
+                    y1 = field[i].data
+                    dt = t1-t0
+                    X = y0*(1-(time-t0)/dt) + y1*(1-(t1-time)/dt)
+                end
+            end
+        end
+    end
+    evaluate_basis!(E, ip.coords, N)
+    evaluate_dbasis!(E, ip.coords, dN)
+    calculate_jacobian!(J, dN, X)
+    detJ = inv3!(invJ, J)
+    return detJ
+end
